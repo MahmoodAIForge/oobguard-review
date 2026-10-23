@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Run OOBGuard out-of-body detection on a surgical video in your browser and review its blackouts. Nothing is uploaded.">
+<title>OOBGuard Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Figtree:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one step on screen at a time — open, analyse, review. Theatre-monitor look: deep slate, scope-teal signal. */
+:root {
+  --bg: #0b1013;
+  --surface: #121a1f;
+  --raise: #18232a;
+  --line: #233139;
+  --ink: #e7eef0;
+  --muted: #8b9ca4;
+  --scope: #43d1bf;          /* endoscope-monitor teal */
+  --scope-ink: #04201c;
+  --oob: #ff6f5b;            /* primary blackout */
+  --guard: #f3b440;          /* guarded blackout */
+  --curve: #8fd3ff;
+  --bad: #ff8a80;
+  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --r: 14px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { background: var(--bg); }
+body { color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  background: radial-gradient(1200px 600px at 80% -10%, rgba(67, 209, 191, 0.08), transparent 60%), var(--bg); min-height: 100vh; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 22px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 20px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 0.84rem; }
+
+/* top bar */
+.bar-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em; font-size: 1.05rem; }
+.lens { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffd9cf 0 10%, #e0614c 28%, #7a1f17 62%, #000 72%); box-shadow: 0 0 0 2px var(--line); }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 0.82rem; }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--scope); box-shadow: 0 0 10px var(--scope); }
+
+/* buttons */
+button, .btn { font: inherit; font-weight: 600; border-radius: 10px; border: 1px solid var(--line); background: var(--raise); color: var(--ink); padding: 8px 14px; cursor: pointer; }
+button:hover, .btn:hover { border-color: #33454f; }
+button.go, .btn.go { background: var(--scope); border-color: var(--scope); color: var(--scope-ink); }
+button.ghost { background: transparent; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+:is(button, .btn, select, input, textarea, canvas, summary):focus-visible { outline: 2px solid var(--scope); outline-offset: 2px; }
+input[type="file"] { display: none; }
+
+/* step 1: open */
+.hero { display: grid; gap: 22px; justify-items: center; text-align: center; padding-block: 6vh 2vh; }
+.hero h1 { font-size: clamp(1.9rem, 4.6vw, 3.1rem); letter-spacing: -0.03em; line-height: 1.08; max-width: 18ch; }
+.hero h1 em { font-style: normal; color: var(--scope); }
+.hero .lede { color: var(--muted); max-width: 52ch; font-size: 1.02rem; }
+.drop { width: min(640px, 100%); border: 1.5px dashed #2f4049; border-radius: 18px; padding: 30px 20px; display: grid; gap: 12px; justify-items: center;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent); transition: border-color .2s, background .2s; }
+.drop.over { border-color: var(--scope); background: rgba(67, 209, 191, 0.06); }
+.drop .btn.go { padding: 11px 22px; font-size: 1rem; }
+.example { width: min(760px, 100%); display: grid; gap: 6px; text-align: left; }
+.example canvas { width: 100%; height: 110px; display: block; }
+.tag { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+.fps { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; justify-content: center; }
+
+/* step 2: progress */
+.progress { width: min(560px, 100%); margin: 8vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 22px; display: grid; gap: 14px; }
+.meter { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.meter > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--scope), #8ff0e3); transition: width .25s; }
+.steps { display: grid; gap: 6px; font-size: 0.9rem; }
+.steps li { list-style: none; color: var(--muted); display: flex; gap: 10px; }
+.steps li::before { content: "○"; color: var(--line); }
+.steps li.on { color: var(--ink); } .steps li.on::before { content: "◉"; color: var(--scope); }
+.steps li.done::before { content: "●"; color: var(--scope); }
+.steps ul { margin: 0; padding: 0; display: grid; gap: 6px; }
+
+/* step 3: workspace */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; align-items: start; }
+@media (max-width: 1000px) { .work { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.file { display: grid; gap: 1px; min-width: 0; }
+.file strong { font-family: var(--font-display); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+.stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; max-width: 100%; }
+.stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.shade { position: absolute; inset: 0; background: #000; display: grid; place-items: center; }
+.shade span { font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; color: #6f7f86; border: 1px solid #263239; padding: 6px 12px; border-radius: 999px; }
+.hud { position: absolute; left: 10px; top: 10px; display: flex; gap: 6px; }
+.hud span { font-family: var(--font-mono); font-size: 0.75rem; background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 6px; color: #cfdade; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; border-radius: 7px; padding: 6px 12px; background: transparent; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--raise); color: var(--ink); }
+.seg button[data-view="primary"][aria-pressed="true"] { box-shadow: inset 0 -2px 0 var(--oob); }
+.seg button[data-view="guarded"][aria-pressed="true"] { box-shadow: inset 0 -2px 0 var(--guard); }
+.transport { display: inline-flex; gap: 4px; }
+.transport button { padding: 6px 10px; font-family: var(--font-mono); font-size: 0.85rem; }
+.transport button.play { min-width: 64px; }
+.timeline { width: 100%; height: 130px; display: block; cursor: crosshair; }
+.totals { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.86rem; color: var(--muted); }
+.totals b { color: var(--ink); font-family: var(--font-mono); font-weight: 600; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
+
+/* review panel */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs button { background: none; border: 0; border-radius: 0; padding: 8px 10px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--scope); }
+.tabs .n { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); margin-left: 4px; }
+.pane { display: grid; gap: 10px; max-height: 560px; overflow-y: auto; padding-right: 2px; }
+.item { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 10px; background: var(--raise); }
+.item.done { border-color: rgba(67, 209, 191, 0.45); }
+.item .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.item .top strong { font-family: var(--font-display); font-weight: 600; }
+.spans { display: grid; gap: 2px; font-size: 0.82rem; }
+.jumps { display: flex; flex-wrap: wrap; gap: 6px; }
+.jumps button { font-size: 0.78rem; padding: 3px 8px; border-radius: 6px; }
+.choices { display: grid; gap: 6px; }
+.choice { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 0.78rem; color: var(--muted); }
+.choices { gap: 10px !important; }
+.jumps.edges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.jumps.edges button { padding: 4px 4px; font-size: 0.76rem; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.jumps.edges button::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--guard); }
+.jumps.edges button.p::before { background: var(--oob); }
+.badge { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--guard); color: var(--guard); margin-left: 6px; vertical-align: 1px; }
+.badge.both { border-color: var(--oob); color: var(--oob); }
+.totals .sub { font-family: var(--font-mono); font-size: 0.8rem; margin-left: 6px; }
+.opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.opts button { font-size: 0.78rem; padding: 3px 9px; border-radius: 999px; background: transparent; color: var(--muted); font-weight: 500; }
+.opts button[aria-pressed="true"] { background: var(--scope); border-color: var(--scope); color: var(--scope-ink); font-weight: 700; }
+select, input[type="text"], textarea { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; width: 100%; min-width: 0; }
+textarea { min-height: 70px; resize: vertical; }
+label.f { display: grid; gap: 4px; font-size: 0.8rem; color: var(--muted); }
+.empty { color: var(--muted); font-size: 0.88rem; padding: 6px 2px; }
+.foot { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.foot .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.linkish { background: none; border: 0; padding: 0; color: var(--muted); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; font-size: 0.82rem; }
+.notice { border-radius: 10px; padding: 9px 12px; font-size: 0.88rem; background: var(--raise); border: 1px solid var(--line); }
+.notice.err { border-color: var(--bad); color: var(--bad); }
+
+details.more { border-top: 1px solid var(--line); padding-top: 14px; }
+details.more summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: 0.9rem; }
+details.more .body { display: grid; gap: 10px; margin-top: 12px; max-width: 78ch; color: var(--muted); font-size: 0.9rem; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.84rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar-top">
+    <span class="brand"><span class="lens" aria-hidden="true"></span>OOBGuard Review</span>
+    <span class="pill">Runs on this computer · nothing is uploaded</span>
+  </div>
+
+  <!-- step 1 -->
+  <section class="hero" id="stepOpen">
+    <h1>See what OOBGuard <em>blacks out</em>, frame by frame.</h1>
+    <p class="lede">Open a surgical video. Both policies run here in your browser, then you check every blackout and record whether it is right.</p>
+    <div class="drop" id="drop">
+      <label class="btn go" for="file" tabindex="0" id="fileBtn">Open a video</label>
+      <input type="file" id="file" accept="video/*,.mp4,.mov,.m4v,.webm">
+      <span class="small muted">or drop an MP4 here</span>
+      <div class="fps" id="fpsRow" hidden>
+        <label class="f" for="fpsIn">Frame rate of this file<input type="text" id="fpsIn" inputmode="decimal" value="25" style="width:120px"></label>
+        <button id="fpsGo">Continue</button>
+      </div>
+    </div>
+    <div id="msg" class="notice" hidden></div>
+    <div class="example" aria-label="Example result">
+      <span class="tag">Example · a 62-second laparoscopic clip with one exit</span>
+      <canvas id="tlEx"></canvas>
+      <div class="totals"><span><i class="dot" style="background:var(--oob)"></i>Primary <b id="exP">—</b></span><span><i class="dot" style="background:var(--guard)"></i>Guarded <b id="exG">—</b></span><span><i class="dot" style="background:var(--curve)"></i>P(out of body), log scale</span></div>
+    </div>
+  </section>
+
+  <!-- step 2 -->
+  <section class="progress" id="stepRun" hidden aria-live="polite">
+    <div class="file"><strong id="runName">video</strong><span class="small muted mono" id="runMeta"></span></div>
+    <div class="steps"><ul>
+      <li id="st1">Download the model (about 110 MB, first time only)</li>
+      <li id="st2">Analyse the video</li>
+    </ul></div>
+    <div class="meter"><span id="runBar"></span></div>
+    <div class="head"><span class="small muted mono" id="runText">Starting…</span><button class="ghost" id="cancelBtn">Stop</button></div>
+  </section>
+
+  <!-- step 3 -->
+  <section class="work" id="stepReview" hidden>
+    <div class="card">
+      <div class="head">
+        <div class="file"><strong id="wName">video</strong><span class="small muted mono" id="wMeta"></span></div>
+        <button class="ghost" id="newBtn">Open another video</button>
+      </div>
+      <div class="stage">
+        <video id="player" playsinline preload="auto"></video>
+        <div class="shade" id="shade" hidden><span id="shadeText">Blacked out</span></div>
+        <div class="hud"><span id="tRead">0:00.000</span><span id="pRead">P —</span></div>
+      </div>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Show">
+          <button data-view="original" aria-pressed="false">Original</button>
+          <button data-view="primary" aria-pressed="true">Primary</button>
+          <button data-view="guarded" aria-pressed="false">Guarded</button>
+        </div>
+        <div class="transport">
+          <button id="back5" title="Back 0.5 s">−½s</button>
+          <button id="back1" title="Back one frame">‹</button>
+          <button id="playBtn" class="play go">Play</button>
+          <button id="fwd1" title="Forward one frame">›</button>
+          <button id="fwd5" title="Forward 0.5 s">+½s</button>
+        </div>
+      </div>
+      <canvas class="timeline" id="tl" tabindex="0" aria-label="Timeline; click to jump"></canvas>
+      <div class="totals">
+        <span><i class="dot" style="background:var(--oob)"></i>Primary <b id="sP">—</b> <span class="sub" id="sPx"></span></span>
+        <span><i class="dot" style="background:var(--guard)"></i>Guarded <b id="sG">—</b> <span class="sub" id="sGx"></span></span>
+        <span class="mono" id="fRead"></span>
+      </div>
+    </div>
+
+    <aside class="card" aria-label="Review">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="stretches">Blackouts<span class="n" id="nS">0</span></button>
+        <button role="tab" aria-selected="false" data-tab="misses">Missed<span class="n" id="nM">0</span></button>
+        <button role="tab" aria-selected="false" data-tab="overall">Verdict</button>
+      </div>
+      <div class="pane" id="pane-stretches"><p class="small muted"><i class="dot" style="background:var(--guard)"></i>guarded · <i class="dot" style="background:var(--oob)"></i>primary. Jump to each edge and step frame by frame (← →).</p><div id="events"></div></div>
+      <div class="pane" id="pane-misses" hidden>
+        <p class="small muted">Outside-body footage that stayed visible? Mark where it starts and ends while watching.</p>
+        <div class="jumps"><button id="missStart">Mark start</button><button id="missEnd">Mark end</button></div>
+        <span class="small mono muted" id="missPending"></span>
+        <div id="misses" style="display:grid;gap:10px"></div>
+      </div>
+      <div class="pane" id="pane-overall" hidden>
+        <div class="choice"><span>Accept</span><div class="opts" data-field="accept"><button data-v="primary">Primary</button><button data-v="guarded">Guarded</button><button data-v="both">Either</button><button data-v="neither">Neither</button></div></div>
+        <div class="choice"><span>Footage lost</span><div class="opts" data-field="loss"><button data-v="none">None</button><button data-v="minor">Minor</button><button data-v="significant">Significant</button></div></div>
+        <label class="f" for="comments">Comments<textarea id="comments"></textarea></label>
+        <label class="f" for="revName">Your name or initials<input type="text" id="revName" autocomplete="name"></label>
+        <label class="f" for="revRole">Role<select id="revRole"><option value="">Choose…</option><option>Consultant surgeon</option><option>Surgical trainee</option><option>Theatre staff</option><option>Researcher</option><option>Other</option></select></label>
+      </div>
+      <div class="foot">
+        <div class="row"><button class="go" id="saveBtn">Save review</button><button id="csvBtn">Download CSV</button></div>
+        <div class="row"><span class="small muted" id="saveState">Your answers are kept in this browser as you go.</span></div>
+        <button class="linkish" id="predBtn">Download the model's decisions</button>
+      </div>
+    </aside>
+  </section>
+
+  <details class="more" id="ownerBox" hidden>
+    <summary>All saved reviews (only you see this)</summary>
+    <div class="body">
+      <div class="head"><span id="ownCount">—</span><span><button id="ownLoad">Refresh</button> <button id="ownCsv" disabled>Download all</button></span></div>
+      <div class="tablewrap"><table id="ownTable"><thead><tr><th>Reviewer</th><th>Role</th><th>Video</th><th>Saved</th><th>Blackouts</th><th>Missed</th><th>Accepts</th><th>Lost</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </details>
+
+  <details class="more">
+    <summary>About the model and its limits</summary>
+    <div class="body">
+      <dl class="kv">
+        <dt>Model</dt><dd>OOBGuard: DINOv2 ViT-S/14 with a bidirectional temporal head (released weights, seed 2027)</dd>
+        <dt>Decisions</dt><dd>2 per second, each using ±4 s of context; every frame takes the nearest decision</dd>
+        <dt>Primary</dt><dd class="mono">P ≥ 0.001487</dd>
+        <dt>Guarded</dt><dd class="mono">P ≥ 0.000527, widened ±1 s</dd>
+        <dt>Engine</dt><dd id="engine">Not loaded yet</dd>
+      </dl>
+      <p>With WebGPU (current Chrome or Edge) an hour of video takes a few minutes; on the processor alone it can take over an hour. Browsers decode video slightly differently from the research pipeline, so probabilities can differ a little from the command-line tool; decisions rarely do.</p>
+      <p>The blackout shown here is a preview drawn over the video. Make copies for sharing with the OOBGuard command-line tool, which checks every frame. OOBGuard is a research prototype, not a medical device, and does not replace human review.</p>
+    </div>
+  </details>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+<script type="module">
+// ---------- configuration (frozen OOBGuard settings) ----------
+const CFG = { rate: 2, ctx: 8, size: 224, primary: 0.0014866153942421079, guarded: 0.0005274784634821117, guardRadius: 2 };
+const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.webgpu.bundle.min.mjs";
+const PARTS = {
+  wasm: [["runtime/ort-jsep.part0.wasm", 11000000], ["runtime/ort-jsep.part1.wasm", 10872216]],
+  head: [["model/head.wasm", 1002637]],
+  encoder: [0,1,2,3,4,5].map(i => [`model/encoder.part${i}.wasm`, 13000000]).concat([["model/encoder.part6.wasm", 8654627]]),
+};
+const EXAMPLE = { fps: 125, n: 7789, probs: [3.98e-06,3.55e-06,3.45e-06,3.29e-06,2.67e-06,2.71e-06,2.93e-06,2.6e-06,2.82e-06,3.06e-06,2.72e-06,1.8e-06,1.31e-06,1.62e-06,4.75e-06,1.38e-05,0.000139,0.696,0.999,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0.998,0.995,0.983,0.949,0.85,0.977,0.251,0.931,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0.546,0.421,0.097,0.724,0.825,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0.567,2.33e-05,1.18e-06,1.44e-05,2.1e-05,3.32e-05,2.46e-05,2.1e-05,1.72e-05,1.06e-05,5.04e-06,2e-06,1.73e-06,1.74e-06,1.93e-06,1.91e-06,2.11e-06,2.32e-06,2.15e-06,1.85e-06,2.81e-06,3.14e-06,3.29e-06,2.31e-06,4.25e-06] };
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+function step(name) { $("stepOpen").hidden = name !== "open"; $("stepRun").hidden = name !== "run"; $("stepReview").hidden = name !== "review"; if (name === "review") requestAnimationFrame(drawMain); if (name === "open") requestAnimationFrame(drawExample); }
+
+// ---------- numeric helpers matching the Python package ----------
+const rint = x => { const f = Math.floor(x), d = x - f; if (d > 0.5) return f + 1; if (d < 0.5) return f; return (f % 2 === 0) ? f : f + 1; };
+function decisionGrid(fps, n) {
+  let last = Math.floor((n - 1) / fps * CFG.rate);
+  while (rint(last * fps / CFG.rate) > n - 1) last--;
+  const frames = new Int32Array(last + 1);
+  for (let t = 0; t <= last; t++) frames[t] = rint(t * fps / CFG.rate);
+  return frames;
+}
+function decide(probs, thr) { return Uint8Array.from(probs, p => p >= thr ? 1 : 0); }
+function guard(d, r) {
+  const out = d.slice();
+  for (let k = 1; k <= r; k++) for (let i = 0; i < d.length; i++) {
+    if (i - k >= 0 && d[i - k]) out[i] = 1;
+    if (i + k < d.length && d[i + k]) out[i] = 1;
+  }
+  return out;
+}
+function nearestTick(frames, f) {           // ties go to the earlier decision
+  let lo = 0, hi = frames.length - 1;
+  if (f <= frames[0]) return 0;
+  if (f >= frames[hi]) return hi;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (frames[m] <= f) lo = m; else hi = m; }
+  return (frames[hi] - f) < (f - frames[lo]) ? hi : lo;
+}
+function nativeMask(dec, frames, n) { const m = new Uint8Array(n); for (let f = 0; f < n; f++) m[f] = dec[nearestTick(frames, f)]; return m; }
+function runs(mask) {
+  const out = []; let s = -1;
+  for (let i = 0; i < mask.length; i++) { if (mask[i] && s < 0) s = i; if (!mask[i] && s >= 0) { out.push([s, i]); s = -1; } }
+  if (s >= 0) out.push([s, mask.length]);
+  return out;
+}
+function buildResult(probs, fps, n) {
+  const frames = decisionGrid(fps, n);
+  const pDec = decide(probs, CFG.primary), gDec = guard(decide(probs, CFG.guarded), CFG.guardRadius);
+  const pMask = nativeMask(pDec, frames, n), gMask = nativeMask(gDec, frames, n);
+  return { probs, frames, pDec, gDec, pMask, gMask, pRuns: runs(pMask), gRuns: runs(gMask), fps, n };
+}
+
+// ---------- OpenCV INTER_AREA downscale (centre square crop -> 224) ----------
+function areaTab(src, dst) {
+  const scale = src / dst, tab = [];
+  for (let dx = 0; dx < dst; dx++) {
+    const fsx1 = dx * scale, fsx2 = fsx1 + scale, cell = Math.min(scale, src - fsx1);
+    let sx1 = Math.ceil(fsx1), sx2 = Math.floor(fsx2);
+    sx2 = Math.min(sx2, src - 1); sx1 = Math.min(sx1, sx2);
+    const w = [];
+    if (sx1 - fsx1 > 1e-3) w.push([sx1 - 1, (sx1 - fsx1) / cell]);
+    for (let sx = sx1; sx < sx2; sx++) w.push([sx, 1 / cell]);
+    if (fsx2 - sx2 > 1e-3) w.push([sx2, Math.min(Math.min(fsx2 - sx2, 1), cell) / cell]);
+    tab.push(w);
+  }
+  return tab;
+}
+const tabCache = new Map();
+function resizeArea(rgba, s, out, offset) {
+  const D = CFG.size;
+  let tab = tabCache.get(s); if (!tab) { tab = areaTab(s, D); tabCache.set(s, tab); }
+  const tmp = new Float32Array(s * D * 3);
+  for (let y = 0; y < s; y++) {
+    const row = y * s * 4, trow = y * D * 3;
+    for (let dx = 0; dx < D; dx++) {
+      let r = 0, g = 0, b = 0;
+      for (const [sx, w] of tab[dx]) { const i = row + sx * 4; r += rgba[i] * w; g += rgba[i + 1] * w; b += rgba[i + 2] * w; }
+      tmp[trow + dx * 3] = r; tmp[trow + dx * 3 + 1] = g; tmp[trow + dx * 3 + 2] = b;
+    }
+  }
+  for (let dy = 0; dy < D; dy++) {
+    const ws = tab[dy];
+    for (let dx = 0; dx < D; dx++) {
+      let r = 0, g = 0, b = 0;
+      for (const [sy, w] of ws) { const i = (sy * D + dx) * 3; r += tmp[i] * w; g += tmp[i + 1] * w; b += tmp[i + 2] * w; }
+      const o = offset + (dy * D + dx) * 3;
+      out[o] = Math.min(255, Math.max(0, rint(r))); out[o + 1] = Math.min(255, Math.max(0, rint(g))); out[o + 2] = Math.min(255, Math.max(0, rint(b)));
+    }
+  }
+}
+
+// ---------- model loading ----------
+let ort = null, encS = null, headS = null, engineName = "";
+async function fetchParts(list, onBytes) {
+  const total = list.reduce((a, [, n]) => a + n, 0), buf = new Uint8Array(total);
+  let off = 0;
+  for (const [path] of list) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`could not download ${path} (${res.status})`);
+    const reader = res.body.getReader();
+    for (;;) { const { done, value } = await reader.read(); if (done) break; buf.set(value, off); off += value.length; onBytes(value.length); }
+  }
+  if (off !== total) throw new Error("a model file was incomplete; reload the page and try again");
+  return buf;
+}
+async function loadEngine() {
+  if (encS) return;
+  const all = [...PARTS.wasm, ...PARTS.head, ...PARTS.encoder], total = all.reduce((a, [, n]) => a + n, 0);
+  let got = 0;
+  const tick = n => { got += n; $("runBar").style.width = `${(100 * got / total).toFixed(1)}%`; $("runText").textContent = `${(got / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB`; };
+  ort = await import(ORT_URL);
+  const wasm = await fetchParts(PARTS.wasm, tick);
+  const head = await fetchParts(PARTS.head, tick);
+  const enc = await fetchParts(PARTS.encoder, tick);
+  ort.env.wasm.wasmBinary = wasm.buffer;
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  $("runText").textContent = "Starting the model…";
+  let ep = "wasm";
+  try { if (navigator.gpu && await navigator.gpu.requestAdapter()) ep = "webgpu"; } catch {}
+  try { encS = await ort.InferenceSession.create(enc, { executionProviders: [ep] }); }
+  catch (e) { if (ep !== "webgpu") throw e; ep = "wasm"; encS = await ort.InferenceSession.create(enc, { executionProviders: ["wasm"] }); }
+  headS = await ort.InferenceSession.create(head, { executionProviders: ["wasm"] });
+  engineName = ep === "webgpu" ? "WebGPU" : "Processor (WebAssembly)";
+  $("engine").textContent = ep === "webgpu" ? "WebGPU (graphics card)" : "WebAssembly (processor, slower)";
+}
+
+// ---------- video probing ----------
+let V = null;
+function probeMp4(file) {
+  return new Promise(async (resolve) => {
+    if (typeof MP4Box === "undefined") return resolve(null);
+    const mp = MP4Box.createFile(); let info = null, failed = false;
+    mp.onReady = i => { info = i; };
+    mp.onError = () => { failed = true; };
+    let off = 0; const CH = 4 * 1024 * 1024;
+    try {
+      while (!info && !failed && off < file.size) {
+        const ab = await file.slice(off, off + CH).arrayBuffer(); ab.fileStart = off;
+        const next = mp.appendBuffer(ab);
+        off = (typeof next === "number" && next > off) ? next : off + ab.byteLength;
+      }
+      if (!info) mp.flush();
+    } catch { return resolve(null); }
+    const vt = info && info.videoTracks && info.videoTracks[0];
+    if (!vt || !vt.nb_samples) return resolve(null);
+    let times = null;
+    try {
+      const s = mp.getTrackById(vt.id).samples;
+      if (s && s.length === vt.nb_samples) { const cts = s.map(x => x.cts).sort((a, b) => a - b), c0 = cts[0]; times = Float64Array.from(cts, c => (c - c0) / vt.timescale); }
+    } catch {}
+    resolve({ fps: vt.nb_samples / (vt.duration / vt.timescale), n: vt.nb_samples, times });
+  });
+}
+function metaOf(video) { return new Promise((res, rej) => { if (video.readyState >= 1) return res(); video.onloadedmetadata = () => res(); video.onerror = () => rej(new Error("This browser cannot play this file. Convert it to H.264 MP4 and try again.")); }); }
+function frameTime(f) { return V.times ? V.times[f] : f / V.fps; }
+function seekTimeFor(f) { return Math.min(frameTime(f) + 0.3 / V.fps, Math.max(0, V.duration - 0.5 / V.fps)); }
+
+const player = $("player");
+async function openFile(file) {
+  hideMsg(); R = null;
+  const url = URL.createObjectURL(file);
+  player.src = url;
+  try { await metaOf(player); } catch (e) { showMsg(e.message, true); return; }
+  V = { file, url, name: file.name, size: file.size, duration: player.duration };
+  const p = await probeMp4(file);
+  if (p) { Object.assign(V, p); start(); }
+  else { $("fpsRow").hidden = false; showMsg("This file does not say its frame rate. Enter it to continue.", false); }
+}
+function setFps(fps) {
+  if (!V || !(fps > 0)) return;
+  Object.assign(V, { fps, n: Math.max(1, Math.round(V.duration * fps)), times: null });
+  $("fpsRow").hidden = true; hideMsg(); start();
+}
+function metaLine() { return `${fmtT(V.n / V.fps)} · ${V.fps.toFixed(2)} fps · ${V.n.toLocaleString()} frames`; }
+function start() {
+  V.key = `v${V.size}_${V.n}`;
+  $("runName").textContent = V.name; $("runMeta").textContent = metaLine();
+  const cached = store.get(`oobg:pred:${V.key}`);
+  if (cached && cached.probs && cached.probs.length === decisionGrid(V.fps, V.n).length) { finish(Float32Array.from(cached.probs), cached.engine); return; }
+  analyse();
+}
+
+// ---------- analysis ----------
+let cancel = false, R = null;
+async function analyse() {
+  cancel = false; step("run");
+  $("st1").className = encS ? "done" : "on"; $("st2").className = "";
+  try { await loadEngine(); } catch (e) { step("open"); showMsg(`The model could not start: ${e.message}`, true); return; }
+  $("st1").className = "done"; $("st2").className = "on"; $("runBar").style.width = "0";
+  const frames = decisionGrid(V.fps, V.n), N = frames.length;
+  const dec = document.createElement("video"); dec.muted = true; dec.preload = "auto"; dec.src = V.url;
+  await metaOf(dec);
+  const W = dec.videoWidth, H = dec.videoHeight, s = Math.min(W, H), x0 = Math.floor((W - s) / 2), y0 = Math.floor((H - s) / 2);
+  const cv = document.createElement("canvas"); cv.width = s; cv.height = s;
+  const cx = cv.getContext("2d", { willReadFrequently: true });
+  const B = engineName === "WebGPU" ? 8 : 2, D = CFG.size, per = D * D * 3;
+  const feats = new Float32Array(N * 384), t0 = performance.now();
+  for (let i = 0; i < N; i += B) {
+    if (cancel) break;
+    const b = Math.min(B, N - i), batch = new Float32Array(b * per);
+    for (let j = 0; j < b; j++) {
+      await seekTo(dec, seekTimeFor(frames[i + j]));
+      cx.drawImage(dec, x0, y0, s, s, 0, 0, s, s);
+      resizeArea(cx.getImageData(0, 0, s, s).data, s, batch, j * per);
+      if (window.OOBGuard.debug) window.OOBGuard.debug.push(Array.from(batch.subarray(j * per, j * per + per).filter((_, q) => q % 997 === 0)));
+    }
+    const out = await encS.run({ image: new ort.Tensor("float32", batch, [b, D, D, 3]) });
+    feats.set(out.embedding.data, i * 384);
+    const done = i + b, el = (performance.now() - t0) / 1000;
+    $("runBar").style.width = `${(100 * done / N).toFixed(1)}%`;
+    $("runText").textContent = `${done} / ${N} samples · ${fmtDur(el / done * (N - done))} left · ${engineName}`;
+  }
+  dec.removeAttribute("src"); dec.load();
+  if (cancel) { step("open"); showMsg("Analysis stopped.", false); return; }
+  const probs = new Float32Array(N), HB = 256;
+  for (let i = 0; i < N; i += HB) {
+    const b = Math.min(HB, N - i), win = new Float32Array(b * 17 * 384);
+    for (let j = 0; j < b; j++) for (let k = -CFG.ctx; k <= CFG.ctx; k++) {
+      const src = Math.min(N - 1, Math.max(0, i + j + k));
+      win.set(feats.subarray(src * 384, src * 384 + 384), (j * 17 + k + CFG.ctx) * 384);
+    }
+    const out = await headS.run({ window: new ort.Tensor("float32", win, [b, 17, 384]) });
+    probs.set(out.p_oob.data, i);
+  }
+  store.set(`oobg:pred:${V.key}`, { probs: Array.from(probs), engine: engineName });
+  finish(probs, engineName);
+}
+function seekTo(v, t) { return new Promise(res => { const done = () => { v.removeEventListener("seeked", done); res(); }; v.addEventListener("seeked", done); v.currentTime = t; }); }
+function finish(probs, engine) {
+  R = buildResult(probs, V.fps, V.n); R.engine = engine || "";
+  $("wName").textContent = V.name; $("wMeta").textContent = metaLine();
+  const dur = V.n / V.fps;
+  const tot = (k, m, rr) => { const sec = m.reduce((a, b) => a + b, 0) / V.fps; $(k).textContent = `${sec.toFixed(1)} s`; $(k + "x").textContent = `${rr.length} stretch${rr.length === 1 ? "" : "es"} · ${(100 * sec / dur).toFixed(1)}%`; };
+  tot("sP", R.pMask, R.pRuns); tot("sG", R.gMask, R.gRuns);
+  loadDraft(); renderEvents(); renderMisses(); step("review"); player.currentTime = 0; updateReadout();
+  window.OOBGuard.last = { probs: Array.from(probs), frames: Array.from(R.frames), fps: V.fps, n: V.n, pRuns: R.pRuns, gRuns: R.gRuns };
+}
+
+// ---------- formatting ----------
+function fmtT(t) { const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s.toFixed(3).padStart(6, "0")}`; }
+function fmtDur(s) { if (!isFinite(s)) return "—"; if (s < 90) return `${Math.max(1, Math.round(s))} s`; if (s < 5400) return `${Math.round(s / 60)} min`; return `${(s / 3600).toFixed(1)} h`; }
+function fmtP(p) { return p >= 0.01 ? p.toFixed(3) : p.toExponential(1); }
+function showMsg(t, err) { const m = $("msg"); m.textContent = t; m.className = err ? "notice err" : "notice"; m.hidden = false; }
+function hideMsg() { $("msg").hidden = true; }
+
+// ---------- player ----------
+let view = "primary";
+function curFrame() {
+  if (!V) return 0;
+  const t = player.currentTime;
+  if (V.times) { let lo = 0, hi = V.n - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (V.times[m] <= t + 1e-6) lo = m; else hi = m; } return V.times[hi] <= t + 1e-6 ? hi : lo; }
+  return Math.min(V.n - 1, Math.max(0, Math.floor(t * V.fps + 1e-6)));
+}
+function updateReadout() {
+  if (!V || !R) return;
+  const f = curFrame(), k = nearestTick(R.frames, f);
+  $("tRead").textContent = fmtT(player.currentTime); $("pRead").textContent = `P ${fmtP(R.probs[k])}`;
+  $("fRead").textContent = `frame ${f.toLocaleString()} / ${V.n.toLocaleString()}`;
+  const masked = view === "primary" ? R.pMask[f] : view === "guarded" ? R.gMask[f] : 0;
+  $("shade").hidden = !masked; $("shadeText").textContent = view === "primary" ? "Blacked out · primary" : "Blacked out · guarded";
+  drawMain();
+}
+function onFrame() { updateReadout(); player.requestVideoFrameCallback(onFrame); }
+if (player.requestVideoFrameCallback) player.requestVideoFrameCallback(onFrame); else player.addEventListener("timeupdate", updateReadout);
+player.addEventListener("seeked", updateReadout);
+player.addEventListener("play", () => $("playBtn").textContent = "Pause");
+player.addEventListener("pause", () => $("playBtn").textContent = "Play");
+$("playBtn").onclick = () => player.paused ? player.play() : player.pause();
+function gotoFrame(f) { if (!V) return; f = Math.max(0, Math.min(V.n - 1, f)); player.pause(); player.currentTime = seekTimeFor(f); }
+$("back1").onclick = () => gotoFrame(curFrame() - 1);
+$("fwd1").onclick = () => gotoFrame(curFrame() + 1);
+$("back5").onclick = () => gotoFrame(curFrame() - Math.round(V.fps / 2));
+$("fwd5").onclick = () => gotoFrame(curFrame() + Math.round(V.fps / 2));
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+  view = b.dataset.view; document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); updateReadout();
+});
+document.addEventListener("keydown", e => {
+  if ($("stepReview").hidden || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) return;
+  if (e.key === " ") { e.preventDefault(); $("playBtn").click(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); gotoFrame(curFrame() - (e.shiftKey ? Math.round(V.fps / 2) : 1)); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); gotoFrame(curFrame() + (e.shiftKey ? Math.round(V.fps / 2) : 1)); }
+});
+
+// ---------- timeline drawing ----------
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function drawTimeline(cv, res, playhead) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (!w) return;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const { probs, frames, fps, n } = res, dur = n / fps;
+  const L = 34, Rr = 6, T = 20, Bt = 18, pw = w - L - Rr, ph = h - T - Bt;
+  const X = t => L + pw * t / dur, lo = -7, Y = p => T + ph * (1 - (Math.log10(Math.max(p, 1e-7)) - lo) / (0 - lo));
+  g.font = `10px ${css("--font-mono")}`; g.fillStyle = css("--muted"); g.strokeStyle = css("--line"); g.lineWidth = 1;
+  for (const e of [0, -3, -6]) { const y = Y(10 ** e); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(e === 0 ? "1" : `1e${e}`, 0, y + 3); }
+  const band = (m, y, c) => { g.fillStyle = c; for (const [a, b] of runs(m)) g.fillRect(X(a / fps), y, Math.max(1.5, X(b / fps) - X(a / fps)), 5); };
+  band(res.gMask, 3, css("--guard")); band(res.pMask, 10, css("--oob"));
+  g.setLineDash([3, 4]); g.globalAlpha = 0.7;
+  g.strokeStyle = css("--oob"); g.beginPath(); g.moveTo(L, Y(CFG.primary)); g.lineTo(L + pw, Y(CFG.primary)); g.stroke();
+  g.strokeStyle = css("--guard"); g.beginPath(); g.moveTo(L, Y(CFG.guarded)); g.lineTo(L + pw, Y(CFG.guarded)); g.stroke();
+  g.setLineDash([]); g.globalAlpha = 1;
+  const grad = g.createLinearGradient(0, T, 0, T + ph); grad.addColorStop(0, "rgba(143,211,255,0.28)"); grad.addColorStop(1, "rgba(143,211,255,0)");
+  g.beginPath(); probs.forEach((p, i) => { const x = X(frames[i] / fps), y = Y(p); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.strokeStyle = css("--curve"); g.lineWidth = 1.5; g.stroke();
+  g.lineTo(X(frames[frames.length - 1] / fps), T + ph); g.lineTo(X(0), T + ph); g.closePath(); g.fillStyle = grad; g.fill();
+  g.fillStyle = css("--muted"); const st = niceStep(dur);
+  for (let t = 0; t <= dur + 1e-9; t += st) { const x = X(t); g.fillText(fmtAxis(t), Math.min(Math.max(L, x - 8), w - 34), h - 3); }
+  if (playhead != null) { const x = X(playhead); g.fillStyle = css("--scope"); g.fillRect(x - 1, T - 2, 2, ph + 4); g.beginPath(); g.arc(x, T - 2, 4, 0, 7); g.fill(); }
+}
+function niceStep(d) { for (const s of [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800]) if (d / s <= 7) return s; return 3600; }
+function fmtAxis(t) { const m = Math.floor(t / 60), s = Math.round(t % 60); return t >= 60 ? `${m}:${String(s).padStart(2, "0")}` : `${s}s`; }
+const EX = buildResult(EXAMPLE.probs, EXAMPLE.fps, EXAMPLE.n);
+function drawExample() { drawTimeline($("tlEx"), EX, null); }
+function drawMain() { if (R && !$("stepReview").hidden) drawTimeline($("tl"), R, player.currentTime); }
+$("tl").addEventListener("click", e => { if (!R) return; const r = $("tl").getBoundingClientRect(), pw = r.width - 40; const t = (e.clientX - r.left - 34) / pw * (V.n / V.fps); player.pause(); player.currentTime = Math.max(0, Math.min(V.duration, t)); });
+window.addEventListener("resize", () => { drawExample(); drawMain(); });
+{ const sec = m => (m.reduce((a, b) => a + b, 0) / EX.fps).toFixed(1); $("exP").textContent = `${sec(EX.pMask)} s`; $("exG").textContent = `${sec(EX.gMask)} s`; }
+
+// ---------- review state ----------
+function blankReview() { return { events: {}, misses: [], accept: "", loss: "", comments: "" }; }
+let review = blankReview(), pendingMiss = null;
+function eventsList() { return R.gRuns.map(([a, b], i) => ({ id: `e${i + 1}`, a, b, prim: R.pRuns.filter(([c, d]) => c < b && d > a) })); }
+function optGroup(field, value, options) {
+  return `<div class="opts" data-field="${field}">${options.map(([v, l]) => `<button data-v="${v}" aria-pressed="${value === v}">${l}</button>`).join("")}</div>`;
+}
+const EDGE = [["exact", "Right"], ["leak", "Leaks"], ["cut", "Cuts"], ["both", "Both"]];
+function renderEvents() {
+  const box = $("events"), list = eventsList();
+  $("nS").textContent = list.length;
+  if (!list.length) { box.innerHTML = '<p class="empty">Nothing was blacked out. If you see outside-body footage, record it under “Missed”.</p>'; return; }
+  box.innerHTML = ""; box.style.cssText = "display:grid;gap:10px";
+  for (const ev of list) {
+    const r = review.events[ev.id] || {};
+    const el = document.createElement("div"); el.className = "item" + (r.truth && (r.primary || !ev.prim.length) && r.guarded ? " done" : "");
+    const pFirst = ev.prim[0], pLast = ev.prim[ev.prim.length - 1];
+    el.innerHTML = `
+      <div class="top"><strong>Blackout ${ev.id.slice(1)}${pFirst ? '<span class="badge both">both policies</span>' : '<span class="badge">guarded only</span>'}</strong><span class="small mono muted">${fmtT(ev.a / V.fps)} · ${((ev.b - ev.a) / V.fps).toFixed(1)} s</span></div>
+      <div class="jumps edges">
+        <button data-go="${ev.a}" title="Go to the guarded start">G start</button>
+        ${pFirst ? `<button class="p" data-go="${pFirst[0]}" title="Go to the primary start">P start</button><button class="p" data-go="${pLast[1] - 1}" title="Go to the primary end">P end</button>` : "<span></span><span></span>"}
+        <button data-go="${ev.b - 1}" title="Go to the guarded end">G end</button>
+      </div>
+      <div class="choices">
+        <div class="choice"><span>Out of body?</span>${optGroup("truth", r.truth, [["yes", "Yes"], ["partly", "Partly"], ["no", "No"]])}</div>
+        ${pFirst ? `<div class="choice"><span>Primary edges</span>${optGroup("primary", r.primary, EDGE)}</div>` : ""}
+        <div class="choice"><span>Guarded edges</span>${optGroup("guarded", r.guarded, EDGE)}</div>
+      </div>
+      <input type="text" data-k="note" placeholder="Note (optional)" aria-label="Note for blackout ${ev.id.slice(1)}">`;
+    el.querySelectorAll("[data-go]").forEach(b => b.onclick = () => gotoFrame(+b.dataset.go));
+    const rec = () => (review.events[ev.id] ||= { start_s: +(ev.a / V.fps).toFixed(3), end_s: +(ev.b / V.fps).toFixed(3) });
+    el.querySelectorAll(".opts").forEach(grp => grp.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+      const now = rec()[grp.dataset.field] === btn.dataset.v ? "" : btn.dataset.v; rec()[grp.dataset.field] = now;
+      grp.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === now)));
+      const q = review.events[ev.id]; el.classList.toggle("done", !!(q.truth && (q.primary || !ev.prim.length) && q.guarded)); saveDraft();
+    }));
+    const note = el.querySelector("[data-k]"); note.id = `${ev.id}-note`; note.value = r.note || "";
+    note.addEventListener("change", () => { rec().note = note.value; saveDraft(); });
+    box.appendChild(el);
+  }
+}
+function renderMisses() {
+  const box = $("misses"); box.innerHTML = ""; $("nM").textContent = review.misses.length;
+  review.misses.forEach((m, i) => {
+    const el = document.createElement("div"); el.className = "item";
+    el.innerHTML = `<div class="top"><strong>Missed ${i + 1}</strong><span class="small mono muted">${fmtT(m.start_s)}–${fmtT(m.end_s)}</span></div>
+      <div class="jumps"><button data-go="1">Go to it</button><button data-del="1">Remove</button></div>
+      <div class="choices">
+        <div class="choice"><span>Visible under</span>${optGroup("policy", m.policy, [["primary", "Primary"], ["guarded", "Guarded"], ["both", "Both"]])}</div>
+        <div class="choice"><span>Identifying?</span>${optGroup("identifying", m.identifying, [["yes", "Yes"], ["no", "No"], ["unsure", "Unsure"]])}</div>
+      </div>
+      <input type="text" data-k="note" placeholder="What is visible" aria-label="What is visible in missed stretch ${i + 1}">`;
+    el.querySelector("[data-go]").onclick = () => { player.pause(); player.currentTime = m.start_s; };
+    el.querySelector("[data-del]").onclick = () => { review.misses.splice(i, 1); saveDraft(); renderMisses(); };
+    el.querySelectorAll(".opts").forEach(grp => grp.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+      m[grp.dataset.field] = m[grp.dataset.field] === btn.dataset.v ? "" : btn.dataset.v;
+      grp.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === m[grp.dataset.field]))); saveDraft();
+    }));
+    const note = el.querySelector("[data-k]"); note.id = `m${i}-note`; note.value = m.note || "";
+    note.addEventListener("change", () => { m.note = note.value; saveDraft(); });
+    box.appendChild(el);
+  });
+}
+$("missStart").onclick = () => { pendingMiss = player.currentTime; $("missPending").textContent = `Start ${fmtT(pendingMiss)} · now go to its end`; };
+$("missEnd").onclick = () => {
+  if (pendingMiss == null) { $("missPending").textContent = "Mark the start first"; return; }
+  const a = Math.min(pendingMiss, player.currentTime), b = Math.max(pendingMiss, player.currentTime);
+  review.misses.push({ start_s: +a.toFixed(3), end_s: +b.toFixed(3), policy: view === "original" ? "" : view, identifying: "", note: "" });
+  pendingMiss = null; $("missPending").textContent = ""; saveDraft(); renderMisses();
+};
+document.querySelectorAll("#pane-overall .opts").forEach(grp => grp.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+  const f = grp.dataset.field; review[f] = review[f] === btn.dataset.v ? "" : btn.dataset.v;
+  grp.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === review[f]))); saveDraft();
+}));
+$("comments").addEventListener("change", () => { review.comments = $("comments").value; saveDraft(); });
+for (const id of ["revName", "revRole"]) $(id).addEventListener("change", () => store.set(`oobg:${id}`, $(id).value));
+$("revName").value = store.get("oobg:revName") || ""; $("revRole").value = store.get("oobg:revRole") || "";
+function saveDraft() { if (V) store.set(`oobg:draft:${V.key}`, review); $("saveState").textContent = "Draft kept in this browser · not saved yet"; }
+function loadDraft() {
+  review = (V && store.get(`oobg:draft:${V.key}`)) || blankReview();
+  $("comments").value = review.comments || "";
+  document.querySelectorAll("#pane-overall .opts").forEach(grp => grp.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.v === review[grp.dataset.field]))));
+}
+document.querySelectorAll(".tabs button").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", String(x === t)));
+  for (const n of ["stretches", "misses", "overall"]) $(`pane-${n}`).hidden = n !== t.dataset.tab;
+});
+
+// ---------- export ----------
+function reviewRecord() {
+  return {
+    reviewer_name: $("revName").value.trim(), reviewer_role: $("revRole").value, video_name: V.name, video_key: V.key,
+    video_seconds: +(V.n / V.fps).toFixed(3), fps: +V.fps.toFixed(4), frames: V.n, engine: R.engine, saved_at: new Date().toISOString(),
+    primary_seconds: +(R.pMask.reduce((a, b) => a + b, 0) / V.fps).toFixed(3), guarded_seconds: +(R.gMask.reduce((a, b) => a + b, 0) / V.fps).toFixed(3),
+    stretches: eventsList().map(ev => ({ id: ev.id, guarded_start_s: +(ev.a / V.fps).toFixed(3), guarded_end_s: +(ev.b / V.fps).toFixed(3),
+      primary_spans: ev.prim.map(([c, d]) => [+(c / V.fps).toFixed(3), +(d / V.fps).toFixed(3)]),
+      truth: review.events[ev.id]?.truth || "", primary_edges: ev.prim.length ? (review.events[ev.id]?.primary || "") : "n/a",
+      guarded_edges: review.events[ev.id]?.guarded || "", note: review.events[ev.id]?.note || "" })),
+    misses: review.misses, accept: review.accept, footage_lost: review.loss, comments: review.comments,
+  };
+}
+const q = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+function reviewCsv(recs) {
+  const head = ["reviewer_name", "reviewer_role", "video_name", "saved_at", "item", "start_s", "end_s", "primary_spans", "truly_oob", "primary_edges", "guarded_edges", "visible_under", "identifying", "note", "accept", "footage_lost", "comments"];
+  const rows = [head.join(",")];
+  for (const r of recs) {
+    const base = [r.reviewer_name, r.reviewer_role, r.video_name, r.saved_at];
+    for (const s of r.stretches || []) rows.push([...base, s.id, s.guarded_start_s, s.guarded_end_s, (s.primary_spans || []).map(p => p.join("-")).join(" "), s.truth, s.primary_edges, s.guarded_edges, "", "", s.note, "", "", ""].map(q).join(","));
+    (r.misses || []).forEach((m, i) => rows.push([...base, `missed${i + 1}`, m.start_s, m.end_s, "", "", "", "", m.policy, m.identifying, m.note, "", "", ""].map(q).join(",")));
+    rows.push([...base, "overall", "", "", "", "", "", "", "", "", "", r.accept, r.footage_lost, r.comments].map(q).join(","));
+  }
+  return rows.join("\n") + "\n";
+}
+let downloads = null;
+async function offer(filename, text) {
+  downloads ??= await window.claude?.use?.("downloads").catch(() => null);
+  if (!downloads) {
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = filename;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    $("saveState").textContent = `Downloaded ${filename}. Email it to the study team.`; return;
+  }
+  try { await downloads.save({ filename, data: text }); } catch (e) { if (e?.code !== "declined") $("saveState").textContent = `The file was not saved (${e?.code || "error"}).`; }
+}
+const base = () => V.name.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_").slice(0, 60);
+$("csvBtn").onclick = () => offer(`oobguard_review_${base()}.csv`, reviewCsv([reviewRecord()]));
+$("predBtn").onclick = () => {
+  const rows = ["tick,time_s,source_frame,oob_probability,primary,guarded"];
+  R.probs.forEach((p, i) => rows.push(`${i},${(i / CFG.rate).toFixed(1)},${R.frames[i]},${p},${!!R.pDec[i]},${!!R.gDec[i]}`));
+  offer(`oobguard_decisions_${base()}.csv`, rows.join("\n") + "\n");
+};
+
+// ---------- shared storage ----------
+let db = null, user = null, uid = null;
+(async () => {
+  if (!window.claude?.use) { $("saveBtn").hidden = true; $("saveState").textContent = "Your answers are kept in this browser as you go. When you finish, press “Download CSV” and email the file to the study team."; return; }
+  [db, user] = await Promise.all([window.claude.use("db").catch(() => null), window.claude.use("user").catch(() => null)]);
+  if (user) { try { uid = await user.id(); } catch {} }
+  if (user && await user.isOwner().catch(() => false)) { $("ownerBox").hidden = false; loadAll(); }
+})();
+$("saveBtn").onclick = async () => {
+  const rec = reviewRecord();
+  if (!db || !uid) { $("saveState").textContent = "Saving needs the page opened in claude.ai with Contributor access. Use “Download CSV” and send the file to the study team."; return; }
+  $("saveBtn").disabled = true;
+  try {
+    await db.doc(`reviews/${uid}/videos/${V.key}`).set(rec);
+    await db.doc(`reviews/${uid}`).set({ reviewer_name: rec.reviewer_name, reviewer_role: rec.reviewer_role, updated_at: rec.saved_at });
+    $("saveState").textContent = `Saved at ${new Date().toLocaleTimeString()} · visible to you and the study owner only`;
+    if (!$("ownerBox").hidden) loadAll();
+  } catch (e) {
+    $("saveState").textContent = e?.code === "invalid_argument"
+      ? "Your access does not allow saving here. Use “Download CSV” and send the file to the study team."
+      : `Not saved (${e?.code || "error"}). Try again or download the CSV.`;
+  } finally { $("saveBtn").disabled = false; }
+};
+let allRecs = [];
+async function loadAll() {
+  if (!db) return;
+  try {
+    const people = await db.collection("reviews").get(); allRecs = [];
+    for (const p of people.docs) { const vids = await db.collection(`reviews/${p.id}/videos`).get(); for (const v of vids.docs) allRecs.push({ ...v.data(), _uid: p.id }); }
+    allRecs.sort((a, b) => String(b.saved_at).localeCompare(String(a.saved_at)));
+    const tb = $("ownTable").querySelector("tbody"); tb.innerHTML = "";
+    $("ownCount").textContent = allRecs.length ? `${allRecs.length} review${allRecs.length === 1 ? "" : "s"}` : "No reviews saved yet";
+    for (const r of allRecs) {
+      const tr = document.createElement("tr");
+      [r.reviewer_name || r._uid.slice(0, 8), r.reviewer_role, r.video_name, (r.saved_at || "").slice(0, 16).replace("T", " "), (r.stretches || []).length, (r.misses || []).length, r.accept, r.footage_lost]
+        .forEach(v => { const td = document.createElement("td"); td.textContent = v ?? ""; tr.appendChild(td); });
+      tb.appendChild(tr);
+    }
+    $("ownCsv").disabled = !allRecs.length;
+  } catch (e) { $("ownCount").textContent = `Could not load reviews (${e?.code || "error"})`; }
+}
+$("ownLoad").onclick = loadAll;
+$("ownCsv").onclick = () => offer("oobguard_all_reviews.csv", reviewCsv(allRecs));
+
+// ---------- wiring ----------
+$("file").addEventListener("change", e => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ""; });
+$("fileBtn").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) openFile(f); });
+$("fpsGo").onclick = () => setFps(parseFloat($("fpsIn").value));
+$("cancelBtn").onclick = () => { cancel = true; };
+$("newBtn").onclick = () => { player.pause(); step("open"); };
+window.OOBGuard = { openFile, setFps, analyse, loadEngine, probeMp4, get engine() { return engineName; }, last: null };
+drawExample();
+</script>
+</body>
+</html>
