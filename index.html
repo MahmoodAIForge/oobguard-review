@@ -155,6 +155,11 @@ details.more .body { display: grid; gap: 10px; margin-top: 12px; max-width: 78ch
 table { border-collapse: collapse; width: 100%; font-size: 0.84rem; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--muted); font-weight: 600; }
+.export { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.export .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.export .meter { height: 4px; }
+.ok { color: var(--scope); }
+.fail { color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -229,6 +234,14 @@ th { color: var(--muted); font-weight: 600; }
         <span><i class="dot" style="background:var(--guard)"></i>Guarded <b id="sG">—</b> <span class="sub" id="sGx"></span></span>
         <span class="mono" id="fRead"></span>
       </div>
+      <div class="export">
+        <div class="row">
+          <span class="small muted" id="exHint">Download a copy with the <b id="exPol">primary</b> blackout burned in. Audio is removed.</span>
+          <span><button id="exBtn" class="go">Download redacted video</button> <button class="ghost" id="exCancel" hidden>Stop</button></span>
+        </div>
+        <div class="meter" id="exMeter" hidden><span id="exBar"></span></div>
+        <span class="small mono" id="exText" aria-live="polite"></span>
+      </div>
     </div>
 
     <aside class="card" aria-label="Review">
@@ -284,6 +297,7 @@ th { color: var(--muted); font-weight: 600; }
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.js"></script>
 <script type="module">
 // ---------- configuration (frozen OOBGuard settings) ----------
 const CFG = { rate: 2, ctx: 8, size: 224, primary: 0.0014866153942421079, guarded: 0.0005274784634821117, guardRadius: 2 };
@@ -523,7 +537,7 @@ function finish(probs, engine) {
   const dur = V.n / V.fps;
   const tot = (k, m, rr) => { const sec = m.reduce((a, b) => a + b, 0) / V.fps; $(k).textContent = `${sec.toFixed(1)} s`; $(k + "x").textContent = `${rr.length} stretch${rr.length === 1 ? "" : "es"} · ${(100 * sec / dur).toFixed(1)}%`; };
   tot("sP", R.pMask, R.pRuns); tot("sG", R.gMask, R.gRuns);
-  loadDraft(); renderEvents(); renderMisses(); step("review"); player.currentTime = 0; updateReadout();
+  loadDraft(); renderEvents(); renderMisses(); step("review"); exSync(); player.currentTime = 0; updateReadout();
   window.OOBGuard.last = { probs: Array.from(probs), frames: Array.from(R.frames), fps: V.fps, n: V.n, pRuns: R.pRuns, gRuns: R.gRuns };
 }
 
@@ -563,7 +577,7 @@ $("fwd1").onclick = () => gotoFrame(curFrame() + 1);
 $("back5").onclick = () => gotoFrame(curFrame() - Math.round(V.fps / 2));
 $("fwd5").onclick = () => gotoFrame(curFrame() + Math.round(V.fps / 2));
 document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
-  view = b.dataset.view; document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); updateReadout();
+  view = b.dataset.view; document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); updateReadout(); exSync();
 });
 document.addEventListener("keydown", e => {
   if ($("stepReview").hidden || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) return;
@@ -796,6 +810,189 @@ drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("
 $("fpsGo").onclick = () => setFps(parseFloat($("fpsIn").value));
 $("cancelBtn").onclick = () => { cancel = true; };
 $("newBtn").onclick = () => { player.pause(); step("open"); };
+// ---------- redacted video export (decode every frame, black out, encode, verify) ----------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function exSync() {
+  const ok = view !== "original";
+  $("exPol").textContent = ok ? view : "chosen";
+  $("exBtn").disabled = !ok || exporting;
+  $("exHint").firstChild.textContent = ok ? "Download a copy with the " : "Choose Primary or Guarded above to download a copy with that ";
+}
+function avcDescription(trak) {
+  for (const e of trak.mdia.minf.stbl.stsd.entries) {
+    const box = e.avcC || e.hvcC || e.av1C;
+    if (box) { const s = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN); box.write(s); return new Uint8Array(s.buffer, 8); }
+  }
+  return undefined;
+}
+// Decode every video frame of an MP4 blob in presentation order; onFrame(frame, index) must close the frame.
+// The file is read once, in order; where the index (moov) sits after the media data, the reader jumps
+// ahead to read it first, then reads the media data that it skipped.
+async function decodeAll(blob, onFrame, onProgress, busy, isCancelled) {
+  const mp = MP4Box.createFile();
+  let track = null, decoder = null, failure = null, index = 0, started = false;
+  const done = [];                      // appended [start, end) ranges
+  mp.onError = e => { failure = new Error(`cannot read the MP4 (${e})`); };
+  mp.onReady = info => {
+    track = info.videoTracks[0] || null;
+    if (!track) return;
+    decoder = new VideoDecoder({ output: f => { const i = index++; try { onFrame(f, i); } catch (e) { failure = e; try { f.close(); } catch {} } }, error: e => { failure = e; } });
+    mp.setExtractionOptions(track.id, null, { nbSamples: 64 });
+  };
+  mp.onSamples = (id, user, samples) => {
+    for (const s of samples) {
+      decoder.decode(new EncodedVideoChunk({ type: s.is_sync ? "key" : "delta", timestamp: Math.round(1e6 * s.cts / s.timescale),
+        duration: Math.round(1e6 * s.duration / s.timescale), data: s.data }));
+    }
+    mp.releaseUsedSamples(id, samples[samples.length - 1].number + 1);
+  };
+  const CH = 2 * 1024 * 1024;
+  const append = async (a, b) => {
+    const ab = await blob.slice(a, b).arrayBuffer(); ab.fileStart = a; done.push([a, a + ab.byteLength]);
+    return mp.appendBuffer(ab);
+  };
+  // phase 1: read until the index is parsed, following the reader's requests to skip media data
+  let off = 0;
+  while (!track && !failure && off < blob.size) {
+    const next = await append(off, Math.min(blob.size, off + CH));
+    off = (typeof next === "number" && next > off) ? next : off + CH;
+  }
+  if (failure) throw failure;
+  if (!track) throw new Error("no video track found; use an MP4 file");
+  const codec = track.codec.startsWith("vp08") ? "vp8" : track.codec;
+  const cfg = { codec, codedWidth: track.video.width, codedHeight: track.video.height };
+  const desc = avcDescription(mp.getTrackById(track.id)); if (desc) cfg.description = desc;
+  const sup = await VideoDecoder.isConfigSupported(cfg).catch(() => ({ supported: false }));
+  if (!sup.supported) throw new Error(`this browser cannot decode ${codec}; try Chrome or Edge`);
+  decoder.configure(cfg);
+  mp.start(); started = true;
+  // phase 2: read every byte not yet read, in file order
+  const covered = x => done.find(([a, b]) => x >= a && x < b);
+  let pos = 0;
+  while (pos < blob.size) {
+    const c = covered(pos);
+    if (c) { pos = c[1]; continue; }
+    if (failure) throw failure;
+    if (isCancelled()) { try { decoder.close(); } catch {} throw new Error("stopped"); }
+    while (decoder.decodeQueueSize > 24 || busy()) { await sleep(2); if (failure) throw failure; }
+    const nextStart = Math.min(...done.map(([a]) => a).filter(a => a > pos), blob.size);
+    const end = Math.min(pos + CH, nextStart);
+    await append(pos, end);
+    pos = end;
+    onProgress(pos / blob.size, index);
+  }
+  mp.flush();
+  await decoder.flush();
+  decoder.close();
+  if (failure) throw failure;
+  return { frames: index, track };
+}
+async function pickEncoder(w, h, fps, bitrate) {
+  const tries = [["avc1.640034", "avc"], ["avc1.640033", "avc"], ["avc1.4d0034", "avc"], ["avc1.42e034", "avc"], ["vp09.00.51.08", "vp9"]];
+  for (const [codec, mux] of tries) {
+    const cfg = { codec, width: w, height: h, bitrate, framerate: Math.min(240, fps), latencyMode: "quality" };
+    if (mux === "avc") cfg.avc = { format: "avc" };
+    try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) return { cfg, mux }; } catch {}
+  }
+  return null;
+}
+let exporting = false, exCancel = false;
+async function exportVideo() {
+  if (!R || view === "original" || exporting) return;
+  if (typeof VideoDecoder === "undefined" || typeof VideoEncoder === "undefined" || typeof Mp4Muxer === "undefined") {
+    $("exText").className = "small mono fail"; $("exText").textContent = "This browser cannot make video files. Use current Chrome or Edge."; return;
+  }
+  const policy = view, mask = policy === "primary" ? R.pMask : R.gMask;
+  const name = `${base()}_oobguard_${policy}.mp4`;
+  // ask for the save location first (needs the click); fall back to building the file in memory
+  let handle = null, writable = null;
+  if (window.showSaveFilePicker && !window.OOBGuard.forceMemory) {
+    try { handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }] }); }
+    catch (e) { if (e?.name === "AbortError") return; handle = null; }
+  }
+  exporting = true; exCancel = false; exSync();
+  $("exCancel").hidden = false; $("exMeter").hidden = false; $("exText").className = "small mono";
+  const bar = p => { $("exBar").style.width = `${(100 * p).toFixed(1)}%`; };
+  const t0 = performance.now();
+  let encoder = null;
+  try {
+    const W = player.videoWidth, H = player.videoHeight;
+    const bitrate = Math.round(Math.min(25e6, Math.max(4e6, V.size * 8 / V.duration)));
+    const enc = await pickEncoder(W, H, V.fps, bitrate);
+    if (!enc) throw new Error("this browser cannot encode video at this size");
+    if (handle) writable = await handle.createWritable();
+    const target = writable ? new Mp4Muxer.FileSystemWritableFileStreamTarget(writable) : new Mp4Muxer.ArrayBufferTarget();
+    const muxer = new Mp4Muxer.Muxer({ target, video: { codec: enc.mux, width: W, height: H }, fastStart: writable ? false : "in-memory", firstTimestampBehavior: "offset" });
+    let encFail = null;
+    encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { encFail = e; } });
+    encoder.configure(enc.cfg);
+    const black = new OffscreenCanvas(W, H); { const g = black.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, W, H); }
+    const gop = Math.max(1, Math.round(V.fps * 2));
+    let blacked = 0;
+    const res = await decodeAll(V.file, (f, i) => {
+      if (encFail) throw encFail;
+      let out = f;
+      if (i < mask.length && mask[i]) { out = new VideoFrame(black, { timestamp: f.timestamp, duration: f.duration ?? undefined }); f.close(); blacked++; }
+      encoder.encode(out, { keyFrame: i % gop === 0 });
+      out.close();
+    }, (p, n) => {
+      bar(0.8 * p);
+      const el = (performance.now() - t0) / 1000;
+      $("exText").textContent = `Writing ${policy} copy · frame ${n.toLocaleString()} of ${V.n.toLocaleString()} · ${fmtDur(el / Math.max(p, 1e-3) * (1 - p) * 1.25)} left`;
+    }, () => encoder.encodeQueueSize > 24, () => exCancel);
+    await encoder.flush(); encoder.close(); encoder = null;
+    if (encFail) throw encFail;
+    muxer.finalize();
+    let outBlob;
+    if (writable) { await writable.close(); writable = null; outBlob = await handle.getFile(); }
+    else outBlob = new Blob([target.buffer], { type: "video/mp4" });
+    if (res.frames !== V.n) throw new Error(`decoded ${res.frames.toLocaleString()} frames but expected ${V.n.toLocaleString()}; the copy was not checked`);
+    // verification pass: decode the copy and check every frame against the mask
+    $("exText").textContent = "Checking every frame of the copy…";
+    const cv = new OffscreenCanvas(32, 18), g = cv.getContext("2d", { willReadFrequently: true });
+    let notBlack = 0, extraBlack = 0;
+    const chk = await decodeAll(outBlob, (f, i) => {
+      g.drawImage(f, 0, 0, 32, 18); f.close();
+      const d = g.getImageData(0, 0, 32, 18).data; let mx = 0;
+      for (let k = 0; k < d.length; k += 4) mx = Math.max(mx, d[k], d[k + 1], d[k + 2]);
+      const isBlack = mx <= 8, want = i < mask.length && !!mask[i];
+      if (want && !isBlack) notBlack++; if (!want && isBlack) extraBlack++;
+    }, p => { bar(0.8 + 0.2 * p); }, () => false, () => exCancel);
+    const passed = chk.frames === V.n && notBlack === 0 && extraBlack === 0;
+    const verdict = { frames: chk.frames, expected: V.n, blacked_requested: blacked, requested_not_black: notBlack, unrequested_black: extraBlack, passed, codec: enc.cfg.codec };
+    window.OOBGuard.lastExport = verdict;
+    bar(1);
+    const mins = fmtDur((performance.now() - t0) / 1000);
+    if (passed) {
+      $("exText").className = "small mono ok";
+      $("exText").textContent = `✓ ${policy} copy checked: all ${V.n.toLocaleString()} frames present, ${blacked.toLocaleString()} blacked out as requested, no other frame black · ${mins}`;
+    } else {
+      $("exText").className = "small mono fail";
+      $("exText").textContent = `✗ Check failed: ${chk.frames.toLocaleString()}/${V.n.toLocaleString()} frames, ${notBlack} should be black but are not, ${extraBlack} black but should not be. Do not share this copy.`;
+    }
+    if (!handle) {
+      if (!passed) return;
+      await offerBlob(name, outBlob);
+    } else if (passed) {
+      $("exText").textContent += ` · saved as ${handle.name}`;
+    }
+  } catch (e) {
+    $("exText").className = "small mono fail";
+    $("exText").textContent = e?.message === "stopped" ? "Stopped. The partial copy should be deleted." : `Export failed: ${e?.message || e}`;
+    if (writable) { try { await writable.abort(); } catch {} }
+  } finally {
+    if (encoder) { try { encoder.close(); } catch {} }
+    exporting = false; $("exCancel").hidden = true; exSync();
+  }
+}
+async function offerBlob(filename, blob) {
+  downloads ??= await window.claude?.use?.("downloads").catch(() => null);
+  if (downloads) { try { await downloads.save({ filename, data: blob }); } catch (e) { if (e?.code !== "declined") $("exText").textContent += ` · not saved (${e?.code || "error"})`; } return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+}
+$("exBtn").onclick = exportVideo;
+$("exCancel").onclick = () => { exCancel = true; };
 window.OOBGuard = { openFile, setFps, analyse, loadEngine, probeMp4, get engine() { return engineName; }, last: null };
 drawExample();
 </script>
