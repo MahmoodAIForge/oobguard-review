@@ -395,7 +395,7 @@ function resizeArea(rgba, s, out, offset) {
 }
 
 // ---------- model loading ----------
-let ort = null, encS = null, headS = null, engineName = "";
+let ort = null, encS = null, headS = null, engineName = "", encBytes = null;
 async function fetchParts(list, onBytes) {
   const total = list.reduce((a, [, n]) => a + n, 0), buf = new Uint8Array(total);
   let off = 0;
@@ -417,6 +417,7 @@ async function loadEngine() {
   const wasm = await fetchParts(PARTS.wasm, tick);
   const head = await fetchParts(PARTS.head, tick);
   const enc = await fetchParts(PARTS.encoder, tick);
+  encBytes = enc;
   ort.env.wasm.wasmBinary = wasm.buffer;
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
   $("runText").textContent = "Starting the model…";
@@ -487,7 +488,28 @@ function start() {
 
 // ---------- analysis ----------
 let cancel = false, R = null;
+function withTimeout(p, ms, msg) { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(msg)), ms); })]).finally(() => clearTimeout(t)); }
+async function useProcessor(reason) {
+  console.warn("OOBGuard: switching to the processor:", reason);
+  try { await encS?.release?.(); } catch {}
+  encS = await ort.InferenceSession.create(encBytes, { executionProviders: ["wasm"] });
+  engineName = "Processor (WebAssembly)"; $("engine").textContent = "WebAssembly (processor, slower)";
+}
+async function runEncoder(batch, b) {
+  const D = CFG.size, feed = () => ({ image: new ort.Tensor("float32", batch, [b, D, D, 3]) });
+  if (engineName === "WebGPU") {
+    try { return await withTimeout(encS.run(feed()), firstGpuRun ? 180000 : 60000, "the graphics card did not respond"); }
+    catch (e) { await useProcessor(e?.message || e); $("runText").textContent = "Graphics card unavailable · continuing on the processor (slower)…"; }
+    finally { firstGpuRun = false; }
+  }
+  return await encS.run(feed());
+}
+let firstGpuRun = true;
 async function analyse() {
+  try { await analyseInner(); }
+  catch (e) { console.error(e); step("open"); showMsg(`Analysis failed: ${e?.message || e}. Reload the page (Ctrl+Shift+R) and try again; if it fails again, try Chrome or Edge.`, true); }
+}
+async function analyseInner() {
   cancel = false; step("run");
   $("st1").className = encS ? "done" : "on"; $("st2").className = "";
   try { await loadEngine(); } catch (e) { step("open"); showMsg(`The model could not start: ${e.message}`, true); return; }
@@ -500,6 +522,7 @@ async function analyse() {
   const cx = cv.getContext("2d", { willReadFrequently: true });
   const B = engineName === "WebGPU" ? 8 : 2, D = CFG.size, per = D * D * 3;
   const feats = new Float32Array(N * 384), t0 = performance.now();
+  if (engineName === "WebGPU" && firstGpuRun) $("runText").textContent = "Preparing the graphics card (the first run can take up to a minute)…";
   for (let i = 0; i < N; i += B) {
     if (cancel) break;
     const b = Math.min(B, N - i), batch = new Float32Array(b * per);
@@ -509,7 +532,7 @@ async function analyse() {
       resizeArea(cx.getImageData(0, 0, s, s).data, s, batch, j * per);
       if (window.OOBGuard.debug) window.OOBGuard.debug.push(Array.from(batch.subarray(j * per, j * per + per).filter((_, q) => q % 997 === 0)));
     }
-    const out = await encS.run({ image: new ort.Tensor("float32", batch, [b, D, D, 3]) });
+    const out = await runEncoder(batch, b);
     feats.set(out.embedding.data, i * 384);
     const done = i + b, el = (performance.now() - t0) / 1000;
     $("runBar").style.width = `${(100 * done / N).toFixed(1)}%`;
@@ -530,7 +553,13 @@ async function analyse() {
   store.set(`oobg:pred:${V.key}`, { probs: Array.from(probs), engine: engineName });
   finish(probs, engineName);
 }
-function seekTo(v, t) { return new Promise(res => { const done = () => { v.removeEventListener("seeked", done); res(); }; v.addEventListener("seeked", done); v.currentTime = t; }); }
+function seekTo(v, t) {
+  return new Promise((res, rej) => {
+    const timer = setTimeout(() => { v.removeEventListener("seeked", done); rej(new Error("the video did not respond while seeking")); }, 20000);
+    const done = () => { clearTimeout(timer); v.removeEventListener("seeked", done); res(); };
+    v.addEventListener("seeked", done); v.currentTime = t;
+  });
+}
 function finish(probs, engine) {
   R = buildResult(probs, V.fps, V.n); R.engine = engine || "";
   $("wName").textContent = V.name; $("wMeta").textContent = metaLine();
