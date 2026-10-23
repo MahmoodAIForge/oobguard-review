@@ -734,8 +734,11 @@ async function offer(filename, text) {
 const base = () => V.name.replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_").slice(0, 60);
 $("csvBtn").onclick = () => offer(`oobguard_review_${base()}.csv`, reviewCsv([reviewRecord()]));
 $("predBtn").onclick = () => {
-  const rows = ["tick,time_s,source_frame,oob_probability,primary,guarded"];
-  R.probs.forEach((p, i) => rows.push(`${i},${(i / CFG.rate).toFixed(1)},${R.frames[i]},${p},${!!R.pDec[i]},${!!R.gDec[i]}`));
+  // each decision covers the frames nearer to it than to its neighbours (ties go to the earlier decision)
+  const fr = R.frames, N = fr.length, from = i => i === 0 ? 0 : Math.floor((fr[i - 1] + fr[i]) / 2) + 1;
+  const lab = d => d ? "OOB" : "InBody";
+  const rows = ["decision,time_s,source_frame,frames_from,frames_to,oob_probability,primary,guarded"];
+  R.probs.forEach((p, i) => rows.push(`${i},${(i / CFG.rate).toFixed(1)},${fr[i]},${from(i)},${i === N - 1 ? V.n - 1 : from(i + 1) - 1},${p},${lab(R.pDec[i])},${lab(R.gDec[i])}`));
   offer(`oobguard_decisions_${base()}.csv`, rows.join("\n") + "\n");
 };
 
