@@ -850,7 +850,7 @@ function exSync() {
 function avcDescription(trak) {
   for (const e of trak.mdia.minf.stbl.stsd.entries) {
     const box = e.avcC || e.hvcC || e.av1C;
-    if (box) { const s = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN); box.write(s); return new Uint8Array(s.buffer, 8); }
+    if (box) { const DS = MP4Box.DataStream || window.DataStream; const s = new DS(undefined, 0, DS.BIG_ENDIAN); box.write(s); return new Uint8Array(s.buffer, 8); }
   }
   return undefined;
 }
@@ -957,9 +957,14 @@ async function exportVideo() {
     encoder.configure(enc.cfg);
     const black = new OffscreenCanvas(W, H); { const g = black.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, W, H); }
     const gop = Math.max(1, Math.round(V.fps * 2));
+    // note frames that are already black in the original, so the check does not count them as wrongly blacked
+    const probe = new OffscreenCanvas(32, 18), pg = probe.getContext("2d", { willReadFrequently: true });
+    const isBlackFrame = (ctx, f) => { ctx.drawImage(f, 0, 0, 32, 18); const d = ctx.getImageData(0, 0, 32, 18).data; let mx = 0; for (let k = 0; k < d.length; k += 4) mx = Math.max(mx, d[k], d[k + 1], d[k + 2]); return mx <= 8; };
+    const origBlack = new Uint8Array(V.n + 1);
     let blacked = 0;
     const res = await decodeAll(V.file, (f, i) => {
       if (encFail) throw encFail;
+      if (!(i < mask.length && mask[i]) && i < origBlack.length && isBlackFrame(pg, f)) origBlack[i] = 1;
       let out = f;
       if (i < mask.length && mask[i]) { out = new VideoFrame(black, { timestamp: f.timestamp, duration: f.duration ?? undefined }); f.close(); blacked++; }
       encoder.encode(out, { keyFrame: i % gop === 0 });
@@ -981,11 +986,9 @@ async function exportVideo() {
     const cv = new OffscreenCanvas(32, 18), g = cv.getContext("2d", { willReadFrequently: true });
     let notBlack = 0, extraBlack = 0;
     const chk = await decodeAll(outBlob, (f, i) => {
-      g.drawImage(f, 0, 0, 32, 18); f.close();
-      const d = g.getImageData(0, 0, 32, 18).data; let mx = 0;
-      for (let k = 0; k < d.length; k += 4) mx = Math.max(mx, d[k], d[k + 1], d[k + 2]);
-      const isBlack = mx <= 8, want = i < mask.length && !!mask[i];
-      if (want && !isBlack) notBlack++; if (!want && isBlack) extraBlack++;
+      const isBlack = isBlackFrame(g, f); f.close();
+      const want = i < mask.length && !!mask[i];
+      if (want && !isBlack) notBlack++; if (!want && isBlack && !origBlack[i]) extraBlack++;
     }, p => { bar(0.8 + 0.2 * p); }, () => false, () => exCancel);
     const passed = chk.frames === V.n && notBlack === 0 && extraBlack === 0;
     const verdict = { frames: chk.frames, expected: V.n, blacked_requested: blacked, requested_not_black: notBlack, unrequested_black: extraBlack, passed, codec: enc.cfg.codec };
