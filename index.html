@@ -241,6 +241,8 @@ th { color: var(--muted); font-weight: 600; }
         </div>
         <div class="meter" id="exMeter" hidden><span id="exBar"></span></div>
         <span class="small mono" id="exText" aria-live="polite"></span>
+        <span id="exSaveRow" hidden><a id="exSave" class="go" style="display:inline-block;padding:8px 14px;border-radius:8px;text-decoration:none" download>Save video</a> <span class="small muted" id="exSaveNote"></span></span>
+        <span class="small muted">Page build 2026-11-23b</span>
       </div>
     </div>
 
@@ -935,11 +937,12 @@ async function exportVideo() {
   const name = `${base()}_oobguard_${policy}.mp4`;
   // ask for the save location first (needs the click); fall back to building the file in memory
   let handle = null, writable = null;
-  if (window.showSaveFilePicker && !window.OOBGuard.forceMemory) {
+  if (window.showSaveFilePicker && !window.OOBGuard.forceMemory && V.size > 1.5e9) {
     try { handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }] }); }
     catch (e) { if (e?.name === "AbortError") return; handle = null; }
   }
   exporting = true; exCancel = false; exSync();
+  $("exSaveRow").hidden = true; if ($("exSave").href) { try { URL.revokeObjectURL($("exSave").href); } catch {} $("exSave").removeAttribute("href"); }
   $("exCancel").hidden = false; $("exMeter").hidden = false; $("exText").className = "small mono";
   const bar = p => { $("exBar").style.width = `${(100 * p).toFixed(1)}%`; };
   const t0 = performance.now();
@@ -1002,11 +1005,14 @@ async function exportVideo() {
       $("exText").className = "small mono fail";
       $("exText").textContent = `✗ Check failed: ${chk.frames.toLocaleString()}/${V.n.toLocaleString()} frames, ${notBlack} should be black but are not, ${extraBlack} black but should not be. Do not share this copy.`;
     }
-    if (!handle) {
-      if (!passed) return;
-      await offerBlob(name, outBlob);
-    } else if (passed) {
-      $("exText").textContent += ` · saved as ${handle.name}`;
+    if (passed) {
+      const mb = (outBlob.size / 1e6).toFixed(1);
+      if (handle) $("exText").textContent += ` · written to the folder you picked in the Save window as ${handle.name}`;
+      $("exSave").href = URL.createObjectURL(outBlob); $("exSave").download = name;
+      $("exSave").textContent = `Save video (${name}, ${mb} MB)`;
+      $("exSaveNote").textContent = handle ? "Saves a second copy to your Downloads folder." : "Goes to your Downloads folder. If nothing appears, press this button.";
+      $("exSaveRow").hidden = false;
+      if (!handle) await offerBlob(name, outBlob);
     }
   } catch (e) {
     $("exText").className = "small mono fail";
